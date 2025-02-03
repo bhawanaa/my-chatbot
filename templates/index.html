@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document QA System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+
+        .container {
+            max-width: 700px;
+            margin-top: 50px;
+        }
+
+        .chat-box {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+
+        .qa-entry {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            background: #fff;
+            box-shadow: 0px 0px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .question {
+            font-weight: bold;
+            color: #007bff;
+        }
+
+        .answer {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            border: none;
+        }
+
+        textarea {
+            resize: none;
+            overflow: hidden;
+            min-height: 50px;
+            font-size: 16px;
+        }
+    </style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <h2 class="text-center mb-4">Document Question Answering</h2>
+
+        <!-- File Upload Form -->
+        <div class="card mb-4">
+            <div class="card-header">Upload a Document</div>
+            <div class="card-body">
+                <form id="upload-form" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">Choose a file (PDF, XLSX, DOCX, TXT):</label>
+                        <input type="file" id="file" name="file" accept=".pdf, .xlsx, .docx, .txt" class="form-control"
+                            required />
+                    </div>
+                    <button type="submit" class="btn btn-secondary">Upload File</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Q&A Form -->
+        <div class="card mb-4">
+            <div class="card-header">Ask a Question</div>
+            <div class="card-body">
+                <form id="qa-form">
+                    <div class="mb-3">
+                        <label for="question" class="form-label">Enter your question:</label>
+                        <div class="input-group">
+                            <input type="text" id="question" name="question" class="form-control"
+                                placeholder="Type your question..." required />
+                            <button type="submit" class="btn btn-primary">Submit</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Chat History -->
+        <h4 class="mt-4">Q&A History</h4>
+        <div class="chat-box" id="chat-history"></div>
+    </div>
+
+    <script>
+        $(document).ready(function () {
+            // Handle file upload
+            $("#upload-form").submit(function (event) {
+                event.preventDefault();
+                var formData = new FormData(this);
+                $.ajax({
+                    url: "/upload",
+                    type: "POST",
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    success: function (response) {
+                        alert(response.message);
+                        $("#file").val(""); // Clear the file input
+                    },
+                    error: function (xhr) {
+                        let errMsg =
+                            xhr.responseJSON && xhr.responseJSON.error
+                                ? xhr.responseJSON.error
+                                : "Error uploading file.";
+                        alert(errMsg);
+                    },
+                });
+            });
+
+            // Handle Q&A form submission
+            $("#qa-form").submit(function (event) {
+                event.preventDefault();
+                var questionText = $("#question").val();
+                $.ajax({
+                    url: "/ask",
+                    type: "POST",
+                    data: { question: questionText },
+                    success: function (response) {
+                        appendQA(questionText, response.answer);
+                        $("#question").val(""); // Clear the question input
+                    },
+                    error: function (xhr) {
+                        let errMsg =
+                            xhr.responseJSON && xhr.responseJSON.error
+                                ? xhr.responseJSON.error
+                                : "Error processing request.";
+                        alert(errMsg);
+                    },
+                });
+            });
+
+            // Append Q&A entries to chat history
+            function appendQA(question, answer) {
+                const qaEntry = `
+          <div class="qa-entry">
+            <div class="question">Q: ${question}</div>
+            <textarea class="answer form-control" readonly>${answer}</textarea>
+          </div>
+        `;
+                $("#chat-history").prepend(qaEntry);
+                autoResize();
+            }
+
+            // Automatically adjust the height of answer textareas
+            function autoResize() {
+                $(".answer").each(function () {
+                    this.style.height = "auto";
+                    this.style.height = (this.scrollHeight) + "px";
+                });
+            }
+        });
+    </script>
+</body>
+
+</html>
