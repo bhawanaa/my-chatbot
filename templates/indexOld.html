@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Custom Chatbot</title>
+</head>
+
+<body>
+    <h1>Upload PDF Documents and Chat with the Bot</h1>
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".pdf" multiple required><br><br>
+        <button type="submit">Upload Documents</button>
+    </form>
+
+    <h2>Ask a Question:</h2>
+    <textarea id="userQuestion" placeholder="Ask your question here"></textarea><br><br>
+    <button id="askButton">Ask</button>
+
+    <div id="chatResponse"></div>
+
+    <script>
+        // Upload the documents
+        document.getElementById('uploadForm').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+
+            const response = await fetch('/upload-docs', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+            alert(result.message);  // Display success message
+        });
+
+        // Ask a question
+        document.getElementById('askButton').addEventListener('click', async () => {
+            const query = document.getElementById('userQuestion').value;
+
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query: query })
+            });
+
+            const result = await response.json();
+            document.getElementById('chatResponse').innerText = result.response;
+        });
+    </script>
+</body>
+
+</html>
