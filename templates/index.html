@@ -5,24 +5,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tori Veloci QA</title>
+    <title>Veloci AI</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
     <style>
         body {
-            background-image: url('https://via.placeholder.com/1920x1080'); /* Replace with your image URL */
-            background-size: cover;
-            background-repeat: no-repeat;
-            background-attachment: fixed;
             background-color: #f8f9fa;
         }
 
         .container {
             max-width: 700px;
             margin-top: 50px;
-            background: rgba(255, 255, 255, 0.8); /* Add a slight opacity to the background */
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
         }
 
         .chat-box {
@@ -56,7 +48,18 @@
             border: none;
         }
 
-        textarea {
+        /* Make the question textarea larger and the font bigger */
+        #question {
+            min-height: 150px;
+            font-size: 18px;
+            resize: vertical;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        /* Adjust answer textareas separately if needed */
+        textarea.answer {
             resize: none;
             overflow: hidden;
             min-height: 50px;
@@ -68,7 +71,10 @@
 
 <body>
     <div class="container">
-        <h2 class="text-center mb-4">Tori Veloci Q&A</h2>
+        <!-- Replace heading with logo if needed; here we leave the heading as is for context -->
+        <div class="text-center mb-4">
+            <img src="/static/logo.png" alt="Veloci AI Logo" style="max-width: 300px;">
+        </div>
 
         <!-- File Upload Form -->
         <div class="card mb-4">
@@ -92,11 +98,10 @@
                 <form id="qa-form">
                     <div class="mb-3">
                         <label for="question" class="form-label">Enter your question:</label>
-                        <div class="input-group">
-                            <input type="text" id="question" name="question" class="form-control"
-                                placeholder="Type your question..." required />
-                            <button type="submit" class="btn btn-primary">Submit</button>
-                        </div>
+                        <!-- Updated textarea with increased size and larger font -->
+                        <textarea id="question" name="question" class="form-control" placeholder="Type your question..."
+                            required></textarea>
+                        <button type="submit" class="btn btn-primary mt-2">Submit</button>
                     </div>
                 </form>
             </div>
@@ -124,13 +129,20 @@
                         $("#file").val(""); // Clear the file input
                     },
                     error: function (xhr) {
-                        let errMsg =
-                            xhr.responseJSON && xhr.responseJSON.error
-                                ? xhr.responseJSON.error
-                                : "Error uploading file.";
+                        let errMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : "Error uploading file.";
                         alert(errMsg);
                     },
                 });
+            });
+
+            // Capture keydown on the question textarea
+            $("#question").keydown(function (event) {
+                // If Enter is pressed without Shift, submit the form.
+                if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault(); // Prevent a newline
+                    $("#qa-form").submit(); // Trigger form submission
+                }
+                // Otherwise, allow the default behavior (Shift+Enter inserts a newline).
             });
 
             // Handle Q&A form submission
@@ -143,13 +155,10 @@
                     data: { question: questionText },
                     success: function (response) {
                         appendQA(questionText, response.answer);
-                        $("#question").val(""); // Clear the question input
+                        $("#question").val(""); // Clear the question textarea
                     },
                     error: function (xhr) {
-                        let errMsg =
-                            xhr.responseJSON && xhr.responseJSON.error
-                                ? xhr.responseJSON.error
-                                : "Error processing request.";
+                        let errMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : "Error processing request.";
                         alert(errMsg);
                     },
                 });
