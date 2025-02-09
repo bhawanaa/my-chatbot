@@ -19,7 +19,17 @@ import docx  # for DOCX files
 from fastapi.staticfiles import StaticFiles
 import httpx
 
+# Additional imports for OCR handling
+import pytesseract
+from pdf2image import convert_from_path
+from PIL import Image  # For image file processing
 
+load_dotenv()
+# Set Tesseract command from environment variable or default to Linux path
+pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD", "/usr/bin/tesseract")
+print("Tesseract command set to:", pytesseract.pytesseract.tesseract_cmd)
+
+# Initialize HTTP client for ChatOpenAI
 http_client = httpx.Client(verify=False)
 
 # Initialize FastAPI app
@@ -31,7 +41,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 SECRET_KEY = os.urandom(24)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
-# Set up Jinja2 templates (make sure you have a "templates" directory with index.html)
+# Set up Jinja2 templates (ensure you have a "templates" directory with index.html)
 templates = Jinja2Templates(directory="templates")
 
 # Pandas configuration
@@ -39,12 +49,12 @@ pd.set_option('display.max_rows', None)
 
 # Configure uploads
 UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'docx', 'txt'}
+ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'bmp', 'gif', 'tif', 'tiff'}
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Load environment variables from .env file
-load_dotenv()
+
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("No OPENAI_API_KEY found in the environment.")
@@ -112,8 +122,7 @@ async def ask_question(request: Request, question: str = Form(...)):
         raise HTTPException(status_code=400, detail="No documents uploaded yet.")
     
     prompt = ChatPromptTemplate.from_template("""
-    Answer the following question based only on the provided context.
-  
+    
     <context>
     {context}
     </context>
@@ -141,12 +150,26 @@ async def ask_question(request: Request, question: str = Form(...)):
 def process_file_into_chunks(file_path: str, file_ext: str):
     """
     Process a file based on its type and return a list of text chunks.
+    This function now includes OCR handling for PDFs that have no extractable text,
+    and support for image file types.
     """
     try:
         if file_ext == "pdf":
+            # Attempt to extract text using PyPDFLoader
             loader = PyPDFLoader(file_path)
             docs = loader.load()
-            text = "\n".join([doc.page_content for doc in docs])
+            text = "\n".join([doc.page_content for doc in docs]).strip()
+            # If no text is extracted, assume it's an image-based PDF and use OCR
+            if not text:
+                print("No text extracted using PyPDFLoader, attempting OCR...")
+                images = convert_from_path(file_path)
+                ocr_text_list = []
+                for image in images:
+                    ocr_text = pytesseract.image_to_string(image)
+                    ocr_text_list.append(ocr_text)
+                text = "\n".join(ocr_text_list)
+                if not text.strip():
+                    return "OCR failed to extract any text from the PDF."
         elif file_ext == "xlsx":
             sheets = pd.read_excel(file_path, engine="openpyxl", sheet_name=None)
             sheet_texts = []
@@ -182,16 +205,27 @@ def process_file_into_chunks(file_path: str, file_ext: str):
         elif file_ext == "txt":
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
+        elif file_ext in {"png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"}:
+            # Process image files using OCR directly
+            image = Image.open(file_path)
+            text = pytesseract.image_to_string(image)
         else:
             return f"Unsupported file type: {file_ext}"
     except Exception as e:
         return f"Error processing file: {str(e)}"
     
+    # Ensure that text is not empty
+    if not text.strip():
+        return "No text could be extracted from the file."
+    
     # Split the full text into chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
     chunks = text_splitter.split_text(text)
+    # Filter out any empty chunks
+    chunks = [chunk for chunk in chunks if chunk.strip()]
+    if not chunks:
+        return "The document contains no extractable text after splitting."
     return chunks
-
 
 if __name__ == '__main__':
     import uvicorn
