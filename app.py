@@ -113,6 +113,7 @@ async def ask_question(request: Request, question: str = Form(...)):
     
     prompt = ChatPromptTemplate.from_template("""
     Answer the following question based only on the provided context.
+  
     <context>
     {context}
     </context>
@@ -156,11 +157,20 @@ def process_file_into_chunks(file_path: str, file_ext: str):
                 print("Printing DragForce columns:")
                 print(drag_cols)
                 if drag_cols:
+                    # Convert the DragForce columns to numeric (if not already), then take absolute values.
+                    for col in drag_cols:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').abs()
+                    # Drop rows where all DragForce columns are missing.
                     df = df.dropna(subset=drag_cols, how='all')
-                # Identify columns starting with "YieldForce" and drop rows with all missing values
-                other_cols = [col for col in df.columns if str(col).startswith("YieldForce")]
+                
+                # Identify columns starting with "YieldForce" and drop rows with all missing values.
+                other_cols = [col for col in df.columns if str(col).startswith("YF")]
                 if other_cols:
+                    for col in other_cols:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').abs()
                     df = df.dropna(subset=other_cols, how='all')
+                
+                # Convert the dataframe to text.
                 sheet_text = f"Sheet: {sheet_name}\n" + df.to_string(index=False, max_rows=len(df))
                 sheet_texts.append(sheet_text)
             text = "\n\n".join(sheet_texts)
@@ -181,6 +191,7 @@ def process_file_into_chunks(file_path: str, file_ext: str):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
     chunks = text_splitter.split_text(text)
     return chunks
+
 
 if __name__ == '__main__':
     import uvicorn
