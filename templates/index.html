@@ -93,8 +93,8 @@
                 <div class="card-body">
                     <form id="upload-form" enctype="multipart/form-data">
                         <div class="mb-3">
-                            <label for="file" class="form-label">Choose a file (PDF, XLSX, DOCX, TXT):</label>
-                            <input type="file" id="file" name="file" accept=".pdf, .xlsx, .docx, .txt"
+                            <label for="file" class="form-label">Choose a file (PDF, XLSX, DOCX, TXT, Images):</label>
+                            <input type="file" id="file" name="file" accept=".pdf, .xlsx, .docx, .txt, image/*"
                                 class="form-control" required />
                         </div>
                         <button type="submit" class="btn btn-secondary">Upload File</button>
@@ -188,7 +188,7 @@
                 });
             });
 
-            // Append Q&A entries to chat history
+            // Append Q&A entries to chat history and reset scroll position to the top
             function appendQA(question, answer) {
                 const qaEntry = `
           <div class="qa-entry">
@@ -197,6 +197,8 @@
           </div>
         `;
                 $("#chat-history").prepend(qaEntry);
+                // Set the scrollbar to the top of the chat box
+                $("#chat-history").scrollTop(0);
                 autoResize();
             }
 
