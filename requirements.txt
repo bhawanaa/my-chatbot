@@ -12,7 +12,7 @@ openapi==2.0.0
 opencv-python==4.10.0.84
 openpyxl==3.1.2
 pandas==2.2.2
-pdf2image==1.17.0
+pdf2image
 pdfplumber==0.11.3
 pydf==12
 pypdf==4.3.1
@@ -27,3 +27,4 @@ uvicorn
 itsdangerous
 werkzeug
 jinja2 
+pytesseract
