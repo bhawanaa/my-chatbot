@@ -1,11 +1,14 @@
 FROM python:3.10
 
-# Update package lists and install necessary packages.
+# Update package lists and install necessary packages including Tesseract OCR.
 RUN apt-get update && apt-get install -y \
     git \
     openssl \
     ca-certificates \
     curl \
+    tesseract-ocr \
+    libtesseract-dev \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy your CA certificate bundle (make sure it is valid) to the certificates directory.
@@ -17,6 +20,7 @@ RUN update-ca-certificates
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV TESSERACT_CMD=/usr/bin/tesseract
 
 # Create a non-root user.
 RUN useradd -m -u 1000 user
