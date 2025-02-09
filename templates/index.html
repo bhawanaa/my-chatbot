@@ -65,29 +65,41 @@
             min-height: 50px;
             font-size: 16px;
         }
+
+        /* Styling for the fixed toggle button */
+        #toggle-upload-section {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 0.8rem;
+            padding: 0.25rem 0.5rem;
+            z-index: 9999;
+        }
     </style>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 
 <body>
     <div class="container">
-        <!-- Replace heading with logo if needed; here we leave the heading as is for context -->
+        <!-- Header Section with Logo -->
         <div class="text-center mb-4">
             <img src="/static/logo.png" alt="Veloci AI Logo" style="max-width: 300px;">
         </div>
 
-        <!-- File Upload Form -->
-        <div class="card mb-4">
-            <div class="card-header">Upload a Document</div>
-            <div class="card-body">
-                <form id="upload-form" enctype="multipart/form-data">
-                    <div class="mb-3">
-                        <label for="file" class="form-label">Choose a file (PDF, XLSX, DOCX, TXT):</label>
-                        <input type="file" id="file" name="file" accept=".pdf, .xlsx, .docx, .txt" class="form-control"
-                            required />
-                    </div>
-                    <button type="submit" class="btn btn-secondary">Upload File</button>
-                </form>
+        <!-- Upload Section (hidden by default) -->
+        <div id="upload-section" style="display: none;">
+            <div class="card mb-4">
+                <div class="card-header">Upload a Document</div>
+                <div class="card-body">
+                    <form id="upload-form" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="file" class="form-label">Choose a file (PDF, XLSX, DOCX, TXT):</label>
+                            <input type="file" id="file" name="file" accept=".pdf, .xlsx, .docx, .txt"
+                                class="form-control" required />
+                        </div>
+                        <button type="submit" class="btn btn-secondary">Upload File</button>
+                    </form>
+                </div>
             </div>
         </div>
 
@@ -98,7 +110,6 @@
                 <form id="qa-form">
                     <div class="mb-3">
                         <label for="question" class="form-label">Enter your question:</label>
-                        <!-- Updated textarea with increased size and larger font -->
                         <textarea id="question" name="question" class="form-control" placeholder="Type your question..."
                             required></textarea>
                         <button type="submit" class="btn btn-primary mt-2">Submit</button>
@@ -112,8 +123,22 @@
         <div class="chat-box" id="chat-history"></div>
     </div>
 
+    <!-- Fixed Toggle Button for Upload Section -->
+    <button id="toggle-upload-section" class="btn btn-secondary btn-sm">Upload</button>
+
     <script>
         $(document).ready(function () {
+            // Toggle the upload section when the fixed button is clicked
+            $("#toggle-upload-section").click(function () {
+                $("#upload-section").toggle();
+                // Optionally change the button text based on visibility
+                if ($("#upload-section").is(":visible")) {
+                    $("#toggle-upload-section").text("Hide Upload");
+                } else {
+                    $("#toggle-upload-section").text("Upload");
+                }
+            });
+
             // Handle file upload
             $("#upload-form").submit(function (event) {
                 event.preventDefault();
@@ -142,7 +167,6 @@
                     event.preventDefault(); // Prevent a newline
                     $("#qa-form").submit(); // Trigger form submission
                 }
-                // Otherwise, allow the default behavior (Shift+Enter inserts a newline).
             });
 
             // Handle Q&A form submission
