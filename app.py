@@ -1,5 +1,4 @@
 import os
-import json
 import time
 from dotenv import load_dotenv
 import pandas as pd
@@ -19,12 +18,16 @@ import docx  # for DOCX files
 from fastapi.staticfiles import StaticFiles
 import httpx
 
-# Additional imports for OCR handling
+# Additional imports for OCR and diagram extraction
 import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image  # For image file processing
 
+# Import openai for Whisper speech recognition
+import openai
+
 load_dotenv()
+
 # Set Tesseract command from environment variable or default to Linux path
 pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD", "/usr/bin/tesseract")
 print("Tesseract command set to:", pytesseract.pytesseract.tesseract_cmd)
@@ -34,7 +37,6 @@ http_client = httpx.Client(verify=False)
 
 # Initialize FastAPI app
 app = FastAPI()
-
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Set up session middleware (similar to Flask sessions)
@@ -53,18 +55,19 @@ ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'bmp',
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Load environment variables from .env file
-
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("No OPENAI_API_KEY found in the environment.")
 
-# Set the API key (if required by your libraries)
+# Set the API key for OpenAI
+openai.api_key = openai_api_key
 os.environ["OPENAI_API_KEY"] = openai_api_key
 
 # Initialize global embeddings and vector store
 global_embeddings = OpenAIEmbeddings()
 global_vector_store = None  # Will be initialized on first file upload
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 def allowed_file(filename: str) -> bool:
     """Check if the file extension is allowed."""
@@ -76,7 +79,7 @@ async def index(request: Request):
     chat_history = request.session.get("chat_history", [])
     return templates.TemplateResponse("index.html", {"request": request, "chat_history": chat_history})
 
-# Upload endpoint – accepts file upload and processes it
+# Upload endpoint – accepts file upload, processes text, and extracts diagrams for PDFs
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     if not file or not allowed_file(file.filename):
@@ -91,6 +94,8 @@ async def upload_file(file: UploadFile = File(...)):
         f.write(contents)
     
     file_ext = filename.rsplit(".", 1)[1].lower()
+    
+    # Process text extraction for all file types
     chunks = process_file_into_chunks(file_path, file_ext)
     if isinstance(chunks, str):  # if an error message was returned
         raise HTTPException(status_code=400, detail=chunks)
@@ -101,7 +106,16 @@ async def upload_file(file: UploadFile = File(...)):
     else:
         global_vector_store.add_texts(chunks)
     
-    return JSONResponse(content={"message": f"File '{filename}' processed and added to the knowledge base."})
+    response_data = {"message": f"File '{filename}' processed and added to the knowledge base."}
+    
+    # If the file is a PDF, also extract diagrams/images
+    if file_ext == "pdf":
+        image_paths = extract_diagrams_from_pdf(file_path)
+        image_urls = [f"/static/diagrams/{os.path.basename(path)}?nocache={int(time.time())}" for path in image_paths]
+        print(image_urls)
+        response_data["diagram_urls"] = image_urls
+    
+    return JSONResponse(content=response_data)
 
 def lookup_on_web(question: str) -> str:
     """
@@ -113,39 +127,47 @@ def lookup_on_web(question: str) -> str:
     result = web_chain.invoke({"input": web_search_prompt})
     return result.get("answer", "Sorry, no results found on the web.")
 
-# Ask endpoint – accepts a question and returns an answer
 @app.post("/ask")
 async def ask_question(request: Request, question: str = Form(...)):
     if not question:
         raise HTTPException(status_code=400, detail="No question provided")
+
     if global_vector_store is None:
-        raise HTTPException(status_code=400, detail="No documents uploaded yet.")
-    
+        return JSONResponse(content={"answer": "No documents uploaded yet."}, status_code=400)
+
+    # Define the prompt
     prompt = ChatPromptTemplate.from_template("""
-    
     <context>
     {context}
     </context>
-    Question: {input}""")
-    
+    Question: {input}
+    """)
+
     retriever = global_vector_store.as_retriever()
     document_chain = create_stuff_documents_chain(ChatOpenAI(api_key=openai_api_key, http_client=http_client), prompt)
+
     retrieval_chain = create_retrieval_chain(retriever, document_chain)
-    
-    result = retrieval_chain.invoke({"input": question})
-    if not result or "I do not have enough context" in result:
-        fallback_answer = lookup_on_web(question)
-        answer_text = fallback_answer + "\n\n[This answer was fetched from the web as a fallback.]"
-    else:
-        answer_text = result.get("answer", "")
-    
-    # Update session chat history
-    chat_history = request.session.get("chat_history", [])
-    chat_history.append({"type": "question", "text": question})
-    chat_history.append({"type": "answer", "text": answer_text})
-    request.session["chat_history"] = chat_history
-    
-    return JSONResponse(content={"answer": answer_text, "chat_history": chat_history})
+
+    try:
+        result = retrieval_chain.invoke({"input": question})
+        answer_text = result.get("answer", "Sorry, I couldn't find an answer.")
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+        answer_text = "An error occurred while fetching the answer."
+
+    print(f"🔍 User Question: {question}")
+    print(f"🤖 AI Answer: {answer_text}")
+
+    # Generate speech from AI response using pyttsx3
+    audio_file = text_to_speech(answer_text, output_path="static/output.wav")
+
+    if not os.path.exists(audio_file):
+        return JSONResponse(content={"answer": answer_text, "error": "Audio file not found"}, status_code=500)
+
+    return JSONResponse(content={
+        "answer": answer_text,
+        "audio_url": f"/static/output.wav?nocache={int(time.time())}"
+    })
 
 def process_file_into_chunks(file_path: str, file_ext: str):
     """
@@ -180,10 +202,8 @@ def process_file_into_chunks(file_path: str, file_ext: str):
                 print("Printing DragForce columns:")
                 print(drag_cols)
                 if drag_cols:
-                    # Convert the DragForce columns to numeric (if not already), then take absolute values.
                     for col in drag_cols:
                         df[col] = pd.to_numeric(df[col], errors='coerce').abs()
-                    # Drop rows where all DragForce columns are missing.
                     df = df.dropna(subset=drag_cols, how='all')
                 
                 # Identify columns starting with "YieldForce" and drop rows with all missing values.
@@ -193,12 +213,9 @@ def process_file_into_chunks(file_path: str, file_ext: str):
                         df[col] = pd.to_numeric(df[col], errors='coerce').abs()
                     df = df.dropna(subset=other_cols, how='all')
                 
-                # Convert the dataframe to text.
                 sheet_text = f"Sheet: {sheet_name}\n" + df.to_string(index=False, max_rows=len(df))
                 sheet_texts.append(sheet_text)
             text = "\n\n".join(sheet_texts)
-            print("Final text:")
-            print(text)
         elif file_ext == "docx":
             document = docx.Document(file_path)
             text = "\n".join([para.text for para in document.paragraphs])
@@ -206,7 +223,6 @@ def process_file_into_chunks(file_path: str, file_ext: str):
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
         elif file_ext in {"png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"}:
-            # Process image files using OCR directly
             image = Image.open(file_path)
             text = pytesseract.image_to_string(image)
         else:
@@ -214,18 +230,108 @@ def process_file_into_chunks(file_path: str, file_ext: str):
     except Exception as e:
         return f"Error processing file: {str(e)}"
     
-    # Ensure that text is not empty
     if not text.strip():
         return "No text could be extracted from the file."
     
-    # Split the full text into chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
     chunks = text_splitter.split_text(text)
-    # Filter out any empty chunks
     chunks = [chunk for chunk in chunks if chunk.strip()]
     if not chunks:
         return "The document contains no extractable text after splitting."
     return chunks
+
+import pyttsx3
+
+def text_to_speech(response_text, output_path="output.wav"):
+    engine = pyttsx3.init()
+    
+    # List all available voices for inspection
+    voices = engine.getProperty('voices')
+    print("Available voices:")
+    for voice in voices:
+        print(f"ID: {voice.id} | Name: {voice.name}")
+
+    # Attempt to select a male voice based on common male voice names
+    male_voice_id = None
+    for voice in voices:
+        # You can adjust these keywords depending on what your system offers
+        if any(keyword in voice.name.lower() for keyword in ["david", "alex", "male", "george"]):
+            male_voice_id = voice.id
+            break
+
+    if male_voice_id:
+        engine.setProperty('voice', male_voice_id)
+        print(f"Using male voice: {male_voice_id}")
+    else:
+        print("No male voice found; using default voice.")
+
+    # Adjust the speech rate if desired
+    engine.setProperty('rate', 180)
+    
+    # Save the synthesized speech to a file
+    engine.save_to_file(response_text, output_path)
+    engine.runAndWait()
+    return output_path
+
+
+def extract_diagrams_from_pdf(pdf_path, output_folder="static/diagrams"):
+    """
+    Extracts images from a PDF by converting each page to an image.
+    Returns a list of file paths for the extracted images.
+    """
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder, exist_ok=True)
+    
+    pages = convert_from_path(pdf_path)
+    image_paths = []
+    for i, page in enumerate(pages):
+        image_path = os.path.join(output_folder, f"page_{i+1}.png")
+        page.save(image_path, "PNG")
+        image_paths.append(image_path)
+    return image_paths
+
+# # Endpoint to extract diagrams only
+# @app.post("/upload_diagrams")
+# async def upload_diagrams(file: UploadFile = File(...)):
+#     if not file or not file.filename.lower().endswith(".pdf"):
+#         raise HTTPException(status_code=400, detail="Please upload a valid PDF file.")
+    
+#     filename = secure_filename(file.filename)
+#     file_path = os.path.join(UPLOAD_FOLDER, filename)
+    
+#     contents = await file.read()
+#     with open(file_path, "wb") as f:
+#         f.write(contents)
+    
+#     # Extract images (diagrams) from the PDF
+#     image_paths = extract_diagrams_from_pdf(file_path)
+#     image_urls = [f"/static/diagrams/{os.path.basename(path)}?nocache={int(time.time())}" for path in image_paths]
+    
+#     return JSONResponse(content={
+#         "message": f"Diagrams extracted from '{filename}'.",
+#         "diagram_urls": image_urls
+#     })
+
+# New endpoint for speech recognition using the Whisper API
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3', 'm4a', 'mp4', 'ogg'}
+    if not file or file.filename.split('.')[-1].lower() not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Invalid audio file. Allowed types: wav, mp3, m4a, mp4, ogg")
+    
+    tmp_filename = secure_filename(file.filename)
+    tmp_path = os.path.join(UPLOAD_FOLDER, tmp_filename)
+    contents = await file.read()
+    with open(tmp_path, "wb") as f:
+        f.write(contents)
+    
+    try:
+        with open(tmp_path, "rb") as audio_file:
+            transcript = openai.Audio.transcribe("whisper-1", audio_file)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error transcribing audio: {e}")
+    
+    return JSONResponse(content={"transcript": transcript.get("text", "")})
 
 if __name__ == '__main__':
     import uvicorn

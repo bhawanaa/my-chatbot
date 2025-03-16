@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Veloci AI</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -48,7 +48,7 @@
             border: none;
         }
 
-        /* Make the question textarea larger and the font bigger */
+        /* Larger textarea */
         #question {
             min-height: 150px;
             font-size: 18px;
@@ -58,7 +58,6 @@
             border-radius: 5px;
         }
 
-        /* Adjust answer textareas separately if needed */
         textarea.answer {
             resize: none;
             overflow: hidden;
@@ -66,7 +65,7 @@
             font-size: 16px;
         }
 
-        /* Styling for the fixed toggle button */
+        /* Fixed Toggle Button for Upload Section */
         #toggle-upload-section {
             position: fixed;
             bottom: 20px;
@@ -74,6 +73,40 @@
             font-size: 0.8rem;
             padding: 0.25rem 0.5rem;
             z-index: 9999;
+        }
+
+        /* Mic button styling */
+        #mic-button {
+            border: none;
+            background: transparent;
+            font-size: 1.5rem;
+            cursor: pointer;
+            margin-left: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.2s, transform 0.2s;
+        }
+
+        /* When recording, change color and add a pulsating animation */
+        #mic-button.recording {
+            color: red;
+            animation: pulse 1s infinite;
+            transform: scale(1.2);
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.2);
+            }
+
+            100% {
+                transform: scale(1);
+            }
         }
     </style>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
@@ -108,12 +141,15 @@
             <div class="card-header">Ask a Question</div>
             <div class="card-body">
                 <form id="qa-form">
-                    <div class="mb-3">
-                        <label for="question" class="form-label">Enter your question:</label>
+                    <div class="mb-3 d-flex align-items-start">
                         <textarea id="question" name="question" class="form-control" placeholder="Type your question..."
                             required></textarea>
-                        <button type="submit" class="btn btn-primary mt-2">Submit</button>
+                        <!-- Microphone Button for speech input -->
+                        <button type="button" id="mic-button" title="Press and hold to speak">
+                            <span style="font-size: 30px;">🎤</span>
+                        </button>
                     </div>
+                    <button type="submit" class="btn btn-primary mt-2">Submit</button>
                 </form>
             </div>
         </div>
@@ -131,12 +167,7 @@
             // Toggle the upload section when the fixed button is clicked
             $("#toggle-upload-section").click(function () {
                 $("#upload-section").toggle();
-                // Optionally change the button text based on visibility
-                if ($("#upload-section").is(":visible")) {
-                    $("#toggle-upload-section").text("Hide Upload");
-                } else {
-                    $("#toggle-upload-section").text("Upload");
-                }
+                $("#toggle-upload-section").text($("#upload-section").is(":visible") ? "Hide Upload" : "Upload");
             });
 
             // Handle file upload
@@ -151,7 +182,7 @@
                     contentType: false,
                     success: function (response) {
                         alert(response.message);
-                        $("#file").val(""); // Clear the file input
+                        $("#file").val("");
                     },
                     error: function (xhr) {
                         let errMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : "Error uploading file.";
@@ -160,12 +191,11 @@
                 });
             });
 
-            // Capture keydown on the question textarea
+            // Submit on Enter key (without Shift) for the question textarea
             $("#question").keydown(function (event) {
-                // If Enter is pressed without Shift, submit the form.
                 if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault(); // Prevent a newline
-                    $("#qa-form").submit(); // Trigger form submission
+                    event.preventDefault();
+                    $("#qa-form").submit();
                 }
             });
 
@@ -179,7 +209,9 @@
                     data: { question: questionText },
                     success: function (response) {
                         appendQA(questionText, response.answer);
-                        $("#question").val(""); // Clear the question textarea
+                        $("#question").val("");
+                        // Optionally, play the AI-generated speech response
+                        playAudio(response.audio_url);
                     },
                     error: function (xhr) {
                         let errMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : "Error processing request.";
@@ -188,7 +220,7 @@
                 });
             });
 
-            // Append Q&A entries to chat history and reset scroll position to the top
+            // Append Q&A entries to chat history
             function appendQA(question, answer) {
                 const qaEntry = `
           <div class="qa-entry">
@@ -197,7 +229,6 @@
           </div>
         `;
                 $("#chat-history").prepend(qaEntry);
-                // Set the scrollbar to the top of the chat box
                 $("#chat-history").scrollTop(0);
                 autoResize();
             }
@@ -209,6 +240,80 @@
                     this.style.height = (this.scrollHeight) + "px";
                 });
             }
+
+            // Play Audio Response
+            function playAudio(audioUrl) {
+                if (!audioUrl) {
+                    console.error("No audio URL received!");
+                    return;
+                }
+                console.log("Playing audio:", audioUrl);
+                const audio = new Audio(audioUrl);
+                audio.play().catch(error => {
+                    console.error("Audio playback error:", error);
+                    alert("⚠ Audio playback was blocked! Click anywhere on the page to enable it.");
+                });
+            }
+
+            // Set up Web Speech API for press-and-hold speech recognition
+            var recognition;
+            var recognizing = false;
+            if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.lang = 'en-US';
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 1;
+                recognition.continuous = false;
+
+                recognition.onresult = function (event) {
+                    const transcript = event.results[0][0].transcript;
+                    console.log("Transcription:", transcript);
+                    $("#question").val(transcript);
+                };
+                recognition.onerror = function (event) {
+                    console.error("Speech recognition error:", event.error);
+                    alert("Speech recognition error: " + event.error);
+                };
+                // When speech ends, stop recognition
+                recognition.onspeechend = function () {
+                    console.log("Speech ended, stopping recognition");
+                    recognition.stop();
+                };
+                recognition.onend = function () {
+                    recognizing = false;
+                    $("#mic-button").removeClass("recording");
+                    console.log("Speech recognition ended");
+                    // Auto-submit the form if there is text
+                    if ($("#question").val().trim() !== "") {
+                        $("#qa-form").submit();
+                    }
+                };
+            } else {
+                alert("Speech Recognition API is not supported in this browser.");
+            }
+
+            // Start recognition on mousedown/touchstart on the mic button
+            $("#mic-button").on("mousedown touchstart", function (e) {
+                e.preventDefault();
+                if (recognition && !recognizing) {
+                    recognition.start();
+                    recognizing = true;
+                    $("#mic-button").addClass("recording");
+                    console.log("Speech recognition started");
+                }
+            });
+
+            // Stop recognition on mouseup, touchend, or mouseleave on the mic button
+            $("#mic-button").on("mouseup touchend mouseleave", function (e) {
+                e.preventDefault();
+                if (recognition && recognizing) {
+                    recognition.stop();
+                    recognizing = false;
+                    $("#mic-button").removeClass("recording");
+                    console.log("Speech recognition stopped");
+                }
+            });
         });
     </script>
 </body>
