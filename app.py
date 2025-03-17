@@ -26,6 +26,12 @@ from PIL import Image  # For image file processing
 # Import openai for Whisper speech recognition
 import openai
 
+from gtts import gTTS
+
+# This module is imported so that we can 
+# play the converted audio
+import os
+
 load_dotenv()
 
 # Set Tesseract command from environment variable or default to Linux path
@@ -159,7 +165,8 @@ async def ask_question(request: Request, question: str = Form(...)):
     print(f"🤖 AI Answer: {answer_text}")
 
     # Generate speech from AI response using pyttsx3
-    audio_file = text_to_speech(answer_text, output_path="static/output.wav")
+    #audio_file = text_to_speech(answer_text, output_path="static/output.wav")
+    audio_file = text_to_speech_g(answer_text, output_path="static/output.wav")
 
     if not os.path.exists(audio_file):
         return JSONResponse(content={"answer": answer_text, "error": "Audio file not found"}, status_code=500)
@@ -240,37 +247,87 @@ def process_file_into_chunks(file_path: str, file_ext: str):
         return "The document contains no extractable text after splitting."
     return chunks
 
-import pyttsx3
+# import pyttsx3
 
-def text_to_speech(response_text, output_path="output.wav"):
-    engine = pyttsx3.init()
+# def text_to_speech(response_text, output_path="output.wav"):
+#     output_dir = "static"
+#     if not os.path.exists(output_dir):
+#         os.makedirs(output_dir)
+
+#     output_path = os.path.join(output_dir, "output.wav")
+#     print("Access the file at:", output_path)
+#     engine = pyttsx3.init()
     
-    # List all available voices for inspection
-    voices = engine.getProperty('voices')
-    print("Available voices:")
-    for voice in voices:
-        print(f"ID: {voice.id} | Name: {voice.name}")
+#     # List all available voices for inspection
+#     voices = engine.getProperty('voices')
+#     print("Available voices:")
+#     # for voice in voices:
+#     #     print(f"ID: {voice.id} | Name: {voice.name}")
+#     #     if "English (America, New York City)" in voice.name:
+#     #         engine.setProperty('voice', voice.id)
+#     #         print(f"Selected voice: {voice.name}")
+#     #         break
 
-    # Attempt to select a male voice based on common male voice names
-    male_voice_id = None
-    for voice in voices:
-        # You can adjust these keywords depending on what your system offers
-        if any(keyword in voice.name.lower() for keyword in ["david", "alex", "male", "george"]):
-            male_voice_id = voice.id
-            break
+#     # # Attempt to select a male voice based on common male voice names
+#     # male_voice_id = None
+#     # for voice in voices:
+#     #     # You can adjust these keywords depending on what your system offers
+#     #     if any(keyword in voice.name.lower() for keyword in ["david", "alex", "male", "george"]):
+#     #         male_voice_id = voice.id
+#     #         break
 
-    if male_voice_id:
-        engine.setProperty('voice', male_voice_id)
-        print(f"Using male voice: {male_voice_id}")
-    else:
-        print("No male voice found; using default voice.")
+#     # if male_voice_id:
+#     #     engine.setProperty('voice', male_voice_id)
+#     #     print(f"Using male voice: {male_voice_id}")
+#     # else:
+#     #     print("No male voice found; using default voice.")
 
-    # Adjust the speech rate if desired
-    engine.setProperty('rate', 180)
-    
-    # Save the synthesized speech to a file
-    engine.save_to_file(response_text, output_path)
-    engine.runAndWait()
+#     # Adjust the speech rate if desired
+#     engine.setProperty('rate', 180)
+#     print(response_text)
+
+#     engine.save_to_file(response_text, output_path)
+#     #engine.say(response_text)
+#     engine.runAndWait()
+#     if os.path.exists(output_path):
+#         print("File created at:", output_path)
+#         output_url = f"{output_path}?nocache={int(time.time())}"
+#         print("Access the file at:", output_url)
+#         return output_url
+#     else:
+#         print("Audio file not found at:", output_path)
+#         return None
+#     #print("Access the file at:", output_url)
+#     return output_url
+#     #return output_path
+
+
+
+def text_to_speech_g(response_text, output_path="output.wav"):
+
+    # Language in which you want to convert
+    language = 'en'
+
+    # Passing the text and language to the engine, 
+    # here we have marked slow=False. Which tells 
+    # the module that the converted audio should 
+    # have a high speed
+    myobj = gTTS(text=response_text, lang=language, slow=False)
+
+    output_dir = "static"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    output_path = os.path.join(output_dir, "output.wav")
+
+    #print(output_path)
+
+    # Saving the converted audio in a mp3 file named
+    # welcome 
+    myobj.save(output_path)
+
+    # Playing the converted file
+    os.system("play welcome.mp3 tempo 3.0")
     return output_path
 
 
