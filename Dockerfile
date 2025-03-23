@@ -35,21 +35,6 @@ COPY --chown=user ./requirements.txt requirements.txt
 RUN pip install --no-cache-dir --upgrade -r requirements.txt \
     --trusted-host pypi.org --trusted-host files.pythonhosted.org
 
-# USER root
-# RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists && \
-#     apt-get update && apt-get install -y espeak
-
-# USER root
-# RUN mkdir -p /var/lib/apt/lists/partial && chmod -R 755 /var/lib/apt/lists && \
-#     apt-get update && apt-get install -y espeak-ng
-
-# USER root
-# RUN apt-get update && apt-get install -y ffmpeg
-
-
-# # Switch back to non-root user for running the application.
-# USER user
-
 # Copy the application code.
 COPY --chown=user . /app
 

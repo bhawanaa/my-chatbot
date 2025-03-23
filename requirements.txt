@@ -28,4 +28,4 @@ itsdangerous
 werkzeug
 jinja2 
 pytesseract
-gtts
+elevenlabs

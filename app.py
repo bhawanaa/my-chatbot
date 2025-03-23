@@ -1,395 +1,366 @@
 import os
 import time
-from dotenv import load_dotenv
+import openai
+import requests
 import pandas as pd
+import docx
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from werkzeug.utils import secure_filename
+from pdf2image import convert_from_path
+from PIL import Image
+import pytesseract
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.chains import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
+from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-import docx  # for DOCX files
-from fastapi.staticfiles import StaticFiles
-import httpx
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import ChatPromptTemplate
 
-# Additional imports for OCR and diagram extraction
-import pytesseract
-from pdf2image import convert_from_path
-from PIL import Image  # For image file processing
+from websockets.client import connect  # ✅ async version
 
-# Import openai for Whisper speech recognition
-import openai
+import json
+import wave
+import ssl
+import certifi
 
-from gtts import gTTS
-
-# This module is imported so that we can 
-# play the converted audio
-import os
-
+# Load .env
 load_dotenv()
 
-# Set Tesseract command from environment variable or default to Linux path
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+if not OPENAI_API_KEY or not ELEVENLABS_API_KEY:
+    raise ValueError("Missing API keys in .env")
+
+openai.api_key = OPENAI_API_KEY
 pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD", "/usr/bin/tesseract")
-print("Tesseract command set to:", pytesseract.pytesseract.tesseract_cmd)
 
-# Initialize HTTP client for ChatOpenAI
-http_client = httpx.Client(verify=False)
-
-# Initialize FastAPI app
+# App setup
 app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Set up session middleware (similar to Flask sessions)
-SECRET_KEY = os.urandom(24)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-
-# Set up Jinja2 templates (ensure you have a "templates" directory with index.html)
 templates = Jinja2Templates(directory="templates")
 
-# Pandas configuration
-pd.set_option('display.max_rows', None)
+# Global
+UPLOAD_FOLDER = "uploads"
+DIAGRAM_FOLDER = "static/diagrams"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(DIAGRAM_FOLDER, exist_ok=True)
+ALLOWED_EXTENSIONS = {'pdf', 'docx', 'xlsx', 'txt', 'jpg', 'jpeg', 'png', 'tif'}
 
-# Configure uploads
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'bmp', 'gif', 'tif', 'tiff'}
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("No OPENAI_API_KEY found in the environment.")
-
-# Set the API key for OpenAI
-openai.api_key = openai_api_key
-os.environ["OPENAI_API_KEY"] = openai_api_key
-
-# Initialize global embeddings and vector store
 global_embeddings = OpenAIEmbeddings()
-global_vector_store = None  # Will be initialized on first file upload
+global_vector_store = None
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# === Utils ===
 
-def allowed_file(filename: str) -> bool:
-    """Check if the file extension is allowed."""
+def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Home route – renders index.html with chat history
+def extract_text(file_path, ext):
+    try:
+        if ext == "pdf":
+            loader = PyPDFLoader(file_path)
+            docs = loader.load()
+            text = "\n".join([doc.page_content for doc in docs])
+            if not text:
+                images = convert_from_path(file_path)
+                text = "\n".join(pytesseract.image_to_string(img) for img in images)
+        elif ext == "docx":
+            doc = docx.Document(file_path)
+            text = "\n".join([p.text for p in doc.paragraphs])
+        elif ext == "txt":
+            with open(file_path, encoding="utf-8") as f:
+                text = f.read()
+        elif ext in {"jpg", "jpeg", "png", "tif"}:
+            img = Image.open(file_path)
+            text = pytesseract.image_to_string(img)
+        elif ext == "xlsx":
+            sheets = pd.read_excel(file_path, sheet_name=None)
+            text = "\n\n".join(
+                f"{name}:\n{df.to_string(index=False)}" for name, df in sheets.items()
+            )
+        else:
+            return "Unsupported file"
+        return text
+    except Exception as e:
+        return f"Error: {e}"
+
+def split_text(text):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
+    return splitter.split_text(text)
+
+def text_to_speech(text, output_path="static/output.mp3", voice_id="9BWtsMINqrJLrRacOk9x"):
+    import requests
+
+    # Define the endpoint and parameters
+    url = "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2"
+    }
+
+    # Make the POST request with streaming enabled
+    response = requests.post(url, headers=headers, json=data, stream=True)
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        
+        with open(output_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        print(f"Audio saved to {output_path}")
+    else:
+        print("Error:", response.status_code, response.text)
+    return output_path
+
+
+import asyncio
+from websockets import connect
+import ssl
+import certifi
+import wave
+import os
+import json
+
+async def text_to_speech_streaming(text, output_path="static/output.wav", voice_id="9BWtsMINqrJLrRacOk9x"):
+    url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+
+    if os.path.exists(output_path):
+        os.remove(output_path)
+
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    request_data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",  # ✅ compatible model for Aria
+        "voice_settings": {
+            "stability": 0.4,
+            "similarity_boost": 0.75
+        }
+    }
+
+    headers = [("xi-api-key", ELEVENLABS_API_KEY)]
+
+    try:
+        async with connect(url, additional_headers=headers, ssl=ssl_context, max_size=None) as ws:
+            await ws.send(json.dumps(request_data))
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            with wave.open(output_path, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(22050)
+
+                while True:
+                    try:
+                        chunk = await ws.recv()
+                        if isinstance(chunk, bytes):
+                            wf.writeframes(chunk)
+                        elif isinstance(chunk, str):
+                            response = json.loads(chunk)
+                            if response.get("audio_stream_chunk", {}).get("is_final"):
+                                break
+                    except Exception as e:
+                        print("WebSocket closed:", e)
+                        break
+
+        print(f"✅ TTS saved to: {output_path}")
+        return output_path
+
+    except Exception as e:
+        print("❌ Streaming TTS error:", e)
+        return None
+    
+import aiohttp
+import asyncio
+import os
+import json
+
+
+async def text_to_speech_streaming_new(
+    text, 
+    output_path="static/output.mp3", 
+    voice_id="9BWtsMINqrJLrRacOk9x"
+):
+    """
+    Sends a POST request to ElevenLabs' streaming TTS endpoint and saves 
+    the audio stream to output_path (in MPEG/MP3 format by default).
+    """
+    # The correct endpoint for streaming (note: it's HTTPS, not WSS)
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+
+    # Remove any existing file to avoid confusion
+    if os.path.exists(output_path):
+        os.remove(output_path)
+
+    # JSON body sent to ElevenLabs
+    request_data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",  # or whichever model is appropriate
+        "voice_settings": {
+            "stability": 0.4,
+            "similarity_boost": 0.75
+        }
+    }
+
+    # Required headers
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        #"Accept": "audio/mpeg",
+        "Content-Type": "application/json"
+        
+    }
+
+    # Create the output directory if needed
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=request_data) as response:
+            if response.status != 200:
+                print(f"❌ Streaming TTS error: HTTP {response.status}")
+                error_msg = await response.text()
+                print("Response text:", error_msg)
+                return None
+
+            # Write the streamed audio chunks to a file
+            with open(output_path, "wb") as f:
+                async for chunk in response.content.iter_chunked(4096):
+                    if chunk:
+                        f.write(chunk)
+
+    print(f"✅ TTS saved to: {output_path}")
+    return output_path
+
+# Example usage:
+# asyncio.run(text_to_speech_streaming("Hello from ElevenLabs!"))
+
+
+
+def extract_images_from_pdf(pdf_path):
+    pages = convert_from_path(pdf_path)
+    paths = []
+    for i, page in enumerate(pages):
+        out = os.path.join(DIAGRAM_FOLDER, f"page_{i+1}.png")
+        page.save(out, "PNG")
+        paths.append(out)
+    return paths
+
+# === Routes ===
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    chat_history = request.session.get("chat_history", [])
-    return templates.TemplateResponse("index.html", {"request": request, "chat_history": chat_history})
+    return templates.TemplateResponse("index.html", {"request": request})
 
-# Upload endpoint – accepts file upload, processes text, and extracts diagrams for PDFs
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    if not file or not allowed_file(file.filename):
-        raise HTTPException(status_code=400, detail="No valid file provided")
-    
+    if not allowed_file(file.filename):
+        raise HTTPException(400, detail="Unsupported file")
+
     filename = secure_filename(file.filename)
     file_path = os.path.join(UPLOAD_FOLDER, filename)
-    
-    # Save the uploaded file to disk
-    contents = await file.read()
     with open(file_path, "wb") as f:
-        f.write(contents)
-    
-    file_ext = filename.rsplit(".", 1)[1].lower()
-    
-    # Process text extraction for all file types
-    chunks = process_file_into_chunks(file_path, file_ext)
-    if isinstance(chunks, str):  # if an error message was returned
-        raise HTTPException(status_code=400, detail=chunks)
-    
+        f.write(await file.read())
+
+    ext = filename.rsplit(".", 1)[1].lower()
+    text = extract_text(file_path, ext)
+    if text.startswith("Error") or not text.strip():
+        raise HTTPException(400, detail=text)
+
+    chunks = split_text(text)
+
     global global_vector_store
     if global_vector_store is None:
         global_vector_store = FAISS.from_texts(chunks, global_embeddings)
     else:
         global_vector_store.add_texts(chunks)
-    
-    response_data = {"message": f"File '{filename}' processed and added to the knowledge base."}
-    
-    # If the file is a PDF, also extract diagrams/images
-    if file_ext == "pdf":
-        image_paths = extract_diagrams_from_pdf(file_path)
-        image_urls = [f"/static/diagrams/{os.path.basename(path)}?nocache={int(time.time())}" for path in image_paths]
-        print(image_urls)
-        response_data["diagram_urls"] = image_urls
-    
-    return JSONResponse(content=response_data)
 
-def lookup_on_web(question: str) -> str:
-    """
-    Fallback function: if no answer is found in the documents,
-    simulate a web search using ChatOpenAI.
-    """
-    web_search_prompt = f"Search the web for: {question}\nProvide a concise answer."
-    web_chain = ChatOpenAI(api_key=openai_api_key, http_client=http_client)
-    result = web_chain.invoke({"input": web_search_prompt})
-    return result.get("answer", "Sorry, no results found on the web.")
+    response = {"message": f"{filename} processed"}
+    if ext == "pdf":
+        images = extract_images_from_pdf(file_path)
+        response["diagram_urls"] = [f"/static/diagrams/{os.path.basename(p)}" for p in images]
+
+    return JSONResponse(content=response)
+
+import asyncio
+from fastapi.responses import JSONResponse
+
+async def handle_request(answer: str):
+    # Start the TTS conversion as a background task.
+    # You can also use a task queue like Celery for heavier processing.
+    asyncio.create_task(text_to_speech_streaming_new(answer))
+    
+    # Return response immediately.
+    return JSONResponse(content={
+        "answer": answer,
+        "audio_url": f"/static/output.mp3?nocache={int(time.time())}"
+    })
+
 
 @app.post("/ask")
 async def ask_question(request: Request, question: str = Form(...)):
-    if not question:
-        raise HTTPException(status_code=400, detail="No question provided")
-
     if global_vector_store is None:
-        return JSONResponse(content={"answer": "No documents uploaded yet."}, status_code=400)
+        return JSONResponse(content={"answer": "Upload documents first"}, status_code=400)
 
-    # Define the prompt
     prompt = ChatPromptTemplate.from_template("""
-    <context>
-    {context}
-    </context>
-    Question: {input}
-    """)
+You are a helpful assistant. Answer based on the context below.
+
+Context:
+{context}
+
+Question: {input}
+Answer:
+""")
 
     retriever = global_vector_store.as_retriever()
-    document_chain = create_stuff_documents_chain(ChatOpenAI(api_key=openai_api_key, http_client=http_client), prompt)
+    llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
 
-    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+    doc_chain = create_stuff_documents_chain(llm, prompt)
+    retrieval_chain = create_retrieval_chain(retriever, doc_chain)
 
     try:
         result = retrieval_chain.invoke({"input": question})
-        answer_text = result.get("answer", "Sorry, I couldn't find an answer.")
+        answer = result.get("answer", "No answer found.")
     except Exception as e:
-        print(f"❌ ERROR: {e}")
-        answer_text = "An error occurred while fetching the answer."
+        print("❌ Error:", e)
+        answer = "An error occurred."
 
-    print(f"🔍 User Question: {question}")
-    print(f"🤖 AI Answer: {answer_text}")
 
-    # Generate speech from AI response using pyttsx3
-    #audio_file = text_to_speech(answer_text, output_path="static/output.wav")
-    audio_file = text_to_speech_g(answer_text, output_path="static/output.wav")
-
-    if not os.path.exists(audio_file):
-        return JSONResponse(content={"answer": answer_text, "error": "Audio file not found"}, status_code=500)
-
+    print(f"🤖 Answer: {answer}")
+    text_to_speech(answer)
+    #await handle_request(answer=answer)
+    # await text_to_speech_streaming_new(answer)
     return JSONResponse(content={
-        "answer": answer_text,
-        "audio_url": f"/static/output.wav?nocache={int(time.time())}"
+        "answer": answer,
+        "audio_url": f"/static/output.mp3?nocache={int(time.time())}"
     })
 
-def process_file_into_chunks(file_path: str, file_ext: str):
-    """
-    Process a file based on its type and return a list of text chunks.
-    This function now includes OCR handling for PDFs that have no extractable text,
-    and support for image file types.
-    """
-    try:
-        if file_ext == "pdf":
-            # Attempt to extract text using PyPDFLoader
-            loader = PyPDFLoader(file_path)
-            docs = loader.load()
-            text = "\n".join([doc.page_content for doc in docs]).strip()
-            # If no text is extracted, assume it's an image-based PDF and use OCR
-            if not text:
-                print("No text extracted using PyPDFLoader, attempting OCR...")
-                images = convert_from_path(file_path)
-                ocr_text_list = []
-                for image in images:
-                    ocr_text = pytesseract.image_to_string(image)
-                    ocr_text_list.append(ocr_text)
-                text = "\n".join(ocr_text_list)
-                if not text.strip():
-                    return "OCR failed to extract any text from the PDF."
-        elif file_ext == "xlsx":
-            sheets = pd.read_excel(file_path, engine="openpyxl", sheet_name=None)
-            sheet_texts = []
-            for sheet_name, df in sheets.items():
-                print(df)
-                # Identify columns starting with "DragForce"
-                drag_cols = [col for col in df.columns if str(col).startswith("DragForce")]
-                print("Printing DragForce columns:")
-                print(drag_cols)
-                if drag_cols:
-                    for col in drag_cols:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').abs()
-                    df = df.dropna(subset=drag_cols, how='all')
-                
-                # Identify columns starting with "YieldForce" and drop rows with all missing values.
-                other_cols = [col for col in df.columns if str(col).startswith("YF")]
-                if other_cols:
-                    for col in other_cols:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').abs()
-                    df = df.dropna(subset=other_cols, how='all')
-                
-                sheet_text = f"Sheet: {sheet_name}\n" + df.to_string(index=False, max_rows=len(df))
-                sheet_texts.append(sheet_text)
-            text = "\n\n".join(sheet_texts)
-        elif file_ext == "docx":
-            document = docx.Document(file_path)
-            text = "\n".join([para.text for para in document.paragraphs])
-        elif file_ext == "txt":
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
-        elif file_ext in {"png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"}:
-            image = Image.open(file_path)
-            text = pytesseract.image_to_string(image)
-        else:
-            return f"Unsupported file type: {file_ext}"
-    except Exception as e:
-        return f"Error processing file: {str(e)}"
-    
-    if not text.strip():
-        return "No text could be extracted from the file."
-    
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
-    chunks = text_splitter.split_text(text)
-    chunks = [chunk for chunk in chunks if chunk.strip()]
-    if not chunks:
-        return "The document contains no extractable text after splitting."
-    return chunks
-
-# import pyttsx3
-
-# def text_to_speech(response_text, output_path="output.wav"):
-#     output_dir = "static"
-#     if not os.path.exists(output_dir):
-#         os.makedirs(output_dir)
-
-#     output_path = os.path.join(output_dir, "output.wav")
-#     print("Access the file at:", output_path)
-#     engine = pyttsx3.init()
-    
-#     # List all available voices for inspection
-#     voices = engine.getProperty('voices')
-#     print("Available voices:")
-#     # for voice in voices:
-#     #     print(f"ID: {voice.id} | Name: {voice.name}")
-#     #     if "English (America, New York City)" in voice.name:
-#     #         engine.setProperty('voice', voice.id)
-#     #         print(f"Selected voice: {voice.name}")
-#     #         break
-
-#     # # Attempt to select a male voice based on common male voice names
-#     # male_voice_id = None
-#     # for voice in voices:
-#     #     # You can adjust these keywords depending on what your system offers
-#     #     if any(keyword in voice.name.lower() for keyword in ["david", "alex", "male", "george"]):
-#     #         male_voice_id = voice.id
-#     #         break
-
-#     # if male_voice_id:
-#     #     engine.setProperty('voice', male_voice_id)
-#     #     print(f"Using male voice: {male_voice_id}")
-#     # else:
-#     #     print("No male voice found; using default voice.")
-
-#     # Adjust the speech rate if desired
-#     engine.setProperty('rate', 180)
-#     print(response_text)
-
-#     engine.save_to_file(response_text, output_path)
-#     #engine.say(response_text)
-#     engine.runAndWait()
-#     if os.path.exists(output_path):
-#         print("File created at:", output_path)
-#         output_url = f"{output_path}?nocache={int(time.time())}"
-#         print("Access the file at:", output_url)
-#         return output_url
-#     else:
-#         print("Audio file not found at:", output_path)
-#         return None
-#     #print("Access the file at:", output_url)
-#     return output_url
-#     #return output_path
-
-
-
-def text_to_speech_g(response_text, output_path="output.wav"):
-
-    # Language in which you want to convert
-    language = 'en'
-
-    # Passing the text and language to the engine, 
-    # here we have marked slow=False. Which tells 
-    # the module that the converted audio should 
-    # have a high speed
-    myobj = gTTS(text=response_text, lang=language, slow=False)
-
-    output_dir = "static"
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    output_path = os.path.join(output_dir, "output.wav")
-
-    #print(output_path)
-
-    # Saving the converted audio in a mp3 file named
-    # welcome 
-    myobj.save(output_path)
-
-    # Playing the converted file
-    os.system("play welcome.mp3 tempo 3.0")
-    return output_path
-
-
-def extract_diagrams_from_pdf(pdf_path, output_folder="static/diagrams"):
-    """
-    Extracts images from a PDF by converting each page to an image.
-    Returns a list of file paths for the extracted images.
-    """
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder, exist_ok=True)
-    
-    pages = convert_from_path(pdf_path)
-    image_paths = []
-    for i, page in enumerate(pages):
-        image_path = os.path.join(output_folder, f"page_{i+1}.png")
-        page.save(image_path, "PNG")
-        image_paths.append(image_path)
-    return image_paths
-
-# # Endpoint to extract diagrams only
-# @app.post("/upload_diagrams")
-# async def upload_diagrams(file: UploadFile = File(...)):
-#     if not file or not file.filename.lower().endswith(".pdf"):
-#         raise HTTPException(status_code=400, detail="Please upload a valid PDF file.")
-    
-#     filename = secure_filename(file.filename)
-#     file_path = os.path.join(UPLOAD_FOLDER, filename)
-    
-#     contents = await file.read()
-#     with open(file_path, "wb") as f:
-#         f.write(contents)
-    
-#     # Extract images (diagrams) from the PDF
-#     image_paths = extract_diagrams_from_pdf(file_path)
-#     image_urls = [f"/static/diagrams/{os.path.basename(path)}?nocache={int(time.time())}" for path in image_paths]
-    
-#     return JSONResponse(content={
-#         "message": f"Diagrams extracted from '{filename}'.",
-#         "diagram_urls": image_urls
-#     })
-
-# New endpoint for speech recognition using the Whisper API
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
-    ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3', 'm4a', 'mp4', 'ogg'}
-    if not file or file.filename.split('.')[-1].lower() not in ALLOWED_AUDIO_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Invalid audio file. Allowed types: wav, mp3, m4a, mp4, ogg")
-    
-    tmp_filename = secure_filename(file.filename)
-    tmp_path = os.path.join(UPLOAD_FOLDER, tmp_filename)
-    contents = await file.read()
-    with open(tmp_path, "wb") as f:
-        f.write(contents)
-    
-    try:
-        with open(tmp_path, "rb") as audio_file:
-            transcript = openai.Audio.transcribe("whisper-1", audio_file)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error transcribing audio: {e}")
-    
-    return JSONResponse(content={"transcript": transcript.get("text", "")})
+    ext = file.filename.split('.')[-1].lower()
+    if ext not in {'mp3', 'wav', 'm4a'}:
+        raise HTTPException(400, detail="Audio format not supported")
 
-if __name__ == '__main__':
+    temp_path = os.path.join(UPLOAD_FOLDER, secure_filename(file.filename))
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+
+    with open(temp_path, "rb") as audio_file:
+        result = openai.Audio.transcribe("whisper-1", audio_file)
+
+    return JSONResponse(content={"transcript": result.get("text", "")})
+
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7000)
