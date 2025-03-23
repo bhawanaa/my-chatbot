@@ -95,11 +95,11 @@ def split_text(text):
     splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
     return splitter.split_text(text)
 
-def text_to_speech(text, output_path="static/output.mp3", voice_id="9BWtsMINqrJLrRacOk9x"):
+def text_to_speech(text, output_path="static/output.mp3", voice_id="zcAOhNBS3c14rBihAFp1"):
     import requests
 
     # Define the endpoint and parameters
-    url = "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=mp3_44100_128"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
@@ -307,6 +307,27 @@ async def handle_request(answer: str):
         "audio_url": f"/static/output.mp3?nocache={int(time.time())}"
     })
 
+def get_one_liner(answer: str) -> str:
+    # Split by sentence end punctuation, then return the first non-empty sentence.
+    import re
+    sentences = re.split(r'[.!?]\s+', answer.strip())
+    return sentences[0].strip() + '.' if sentences and sentences[0] else answer
+
+def clean_answer(answer: str) -> str:
+    # List common greetings to remove
+    greetings = ["Sure thing!", "Absolutely!", "Of course!", "Okay!"]
+    for greeting in greetings:
+        if answer.strip().startswith(greeting):
+            # Remove the greeting from the beginning
+            answer = answer[len(greeting):].strip()
+    # Optionally, remove any extra punctuation from the start and then get the first sentence of the remaining text
+    sentences = answer.split('.')
+    for sentence in sentences:
+        trimmed = sentence.strip()
+        if trimmed:
+            return trimmed + '.'
+    return answer
+
 
 @app.post("/ask")
 async def ask_question(request: Request, question: str = Form(...)):
@@ -315,6 +336,7 @@ async def ask_question(request: Request, question: str = Form(...)):
 
     prompt = ChatPromptTemplate.from_template("""
 You are a helpful assistant. Answer based on the context below.
+Answer concisely in one sentence without introductory phrases
 
 Context:
 {context}
@@ -338,11 +360,13 @@ Answer:
 
 
     print(f"🤖 Answer: {answer}")
-    text_to_speech(answer)
+    one_liner_answer= clean_answer(answer)
+    print(one_liner_answer)
+    text_to_speech(one_liner_answer)
     #await handle_request(answer=answer)
     # await text_to_speech_streaming_new(answer)
     return JSONResponse(content={
-        "answer": answer,
+        "answer": one_liner_answer,
         "audio_url": f"/static/output.mp3?nocache={int(time.time())}"
     })
 

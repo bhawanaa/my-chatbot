@@ -77,6 +77,7 @@
 
         /* Mic button styling */
         #mic-button {
+            position: relative;
             border: none;
             background: transparent;
             font-size: 1.5rem;
@@ -88,11 +89,23 @@
             transition: color 0.2s, transform 0.2s;
         }
 
-        /* When recording, change color and add a pulsating animation */
+        /* When recording, add a pulsating animation and a blinking dot indicator */
         #mic-button.recording {
             color: red;
             animation: pulse 1s infinite;
             transform: scale(1.2);
+        }
+
+        #mic-button.recording::after {
+            content: "";
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 10px;
+            height: 10px;
+            background-color: #007bff;
+            border-radius: 50%;
+            animation: blink 1s infinite;
         }
 
         @keyframes pulse {
@@ -106,6 +119,90 @@
 
             100% {
                 transform: scale(1);
+            }
+        }
+
+        @keyframes blink {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        /* Loading indicator (simulating ChatGPT "thinking") */
+        #loading-indicator {
+            display: none;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        /* Container for TTS animation (fixed height) */
+        #speaking-animation-container {
+            height: 40px;
+            position: relative;
+            margin: 10px 0;
+        }
+
+        /* Horizontal wave inside the container */
+        #speaking-animation {
+            display: none;
+            /* Ensure hidden by default */
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            gap: 6px;
+            /* spacing between wave segments */
+        }
+
+        #speaking-animation .bar {
+            width: 5px;
+            height: 5px;
+            background: #007bff;
+            animation: wave 1s infinite;
+            border-radius: 3px;
+        }
+
+        #speaking-animation .bar:nth-child(1) {
+            animation-delay: 0s;
+        }
+
+        #speaking-animation .bar:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        #speaking-animation .bar:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        #speaking-animation .bar:nth-child(4) {
+            animation-delay: 0.6s;
+        }
+
+        #speaking-animation .bar:nth-child(5) {
+            animation-delay: 0.8s;
+        }
+
+        @keyframes wave {
+            0% {
+                width: 5px;
+            }
+
+            50% {
+                width: 25px;
+            }
+
+            /* expand horizontally */
+            100% {
+                width: 5px;
             }
         }
     </style>
@@ -144,13 +241,33 @@
                     <div class="mb-3 d-flex align-items-start">
                         <textarea id="question" name="question" class="form-control" placeholder="Type your question..."
                             required></textarea>
-                        <!-- Microphone Button for speech input -->
+                        <!-- Mic button with integrated indicator -->
                         <button type="button" id="mic-button" title="Press and hold to speak">
                             <span style="font-size: 30px;">🎤</span>
                         </button>
                     </div>
-                    <button type="submit" class="btn btn-primary mt-2">Submit</button>
+                    <button type="submit" id="submit-btn" class="btn btn-primary mt-2">Submit</button>
                 </form>
+
+                <!-- Loading indicator -->
+                <div id="loading-indicator">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p>Processing...</p>
+                </div>
+
+                <!-- Container that reserves space for TTS animation -->
+                <div id="speaking-animation-container">
+                    <!-- TTS Speaking Animation (horizontal wave) -->
+                    <div id="speaking-animation">
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -164,7 +281,13 @@
 
     <script>
         $(document).ready(function () {
-            // Toggle the upload section when the fixed button is clicked
+            // Flag to prevent multiple simultaneous requests
+            let isRequestInProgress = false;
+
+            // Ensure TTS animation is hidden on page load
+            $("#speaking-animation").hide();
+
+            // Toggle the upload section
             $("#toggle-upload-section").click(function () {
                 $("#upload-section").toggle();
                 $("#toggle-upload-section").text($("#upload-section").is(":visible") ? "Hide Upload" : "Upload");
@@ -202,7 +325,14 @@
             // Handle Q&A form submission
             $("#qa-form").submit(function (event) {
                 event.preventDefault();
+                // Prevent multiple requests simultaneously
+                if (isRequestInProgress) return;
+                isRequestInProgress = true;
+                $("#submit-btn").prop("disabled", true);
+
                 var questionText = $("#question").val();
+                // Show loading indicator
+                $("#loading-indicator").show();
                 $.ajax({
                     url: "/ask",
                     type: "POST",
@@ -210,13 +340,20 @@
                     success: function (response) {
                         appendQA(questionText, response.answer);
                         $("#question").val("");
-                        // Optionally, play the AI-generated speech response
                         playAudio(response.audio_url);
+                        // Hide loading indicator when answer received
+                        $("#loading-indicator").hide();
                     },
                     error: function (xhr) {
                         let errMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : "Error processing request.";
                         alert(errMsg);
+                        $("#loading-indicator").hide();
                     },
+                    complete: function () {
+                        // Re-enable the form
+                        isRequestInProgress = false;
+                        $("#submit-btn").prop("disabled", false);
+                    }
                 });
             });
 
@@ -240,19 +377,33 @@
                     this.style.height = (this.scrollHeight) + "px";
                 });
             }
+            // Global flag to track if TTS audio is playing
+            let isAudioPlaying = false;
 
-            // Play Audio Response
+            // Play Audio Response (show/hide TTS wave)
             function playAudio(audioUrl) {
                 if (!audioUrl) {
                     console.error("No audio URL received!");
                     return;
                 }
                 console.log("Playing audio:", audioUrl);
+                // Show TTS wave
+                $("#speaking-animation").show();
                 const audio = new Audio(audioUrl);
-                audio.play().catch(error => {
+                isAudioPlaying = true; // Set flag when audio starts
+                audio.play().then(() => {
+                    console.log("✅ Audio playback started");
+                }).catch(error => {
                     console.error("Audio playback error:", error);
                     alert("⚠ Audio playback was blocked! Click anywhere on the page to enable it.");
+                    $("#speaking-animation").hide();
                 });
+                audio.onended = function () {
+                    // Hide TTS wave when done
+                    $("#speaking-animation").hide();
+                    isAudioPlaying = false;
+                    console.log("Audio playback ended");
+                };
             }
 
             // Set up Web Speech API for press-and-hold speech recognition
@@ -271,20 +422,21 @@
                     console.log("Transcription:", transcript);
                     $("#question").val(transcript);
                 };
+
                 recognition.onerror = function (event) {
                     console.error("Speech recognition error:", event.error);
                     alert("Speech recognition error: " + event.error);
                 };
-                // When speech ends, stop recognition
+
                 recognition.onspeechend = function () {
                     console.log("Speech ended, stopping recognition");
                     recognition.stop();
                 };
+
                 recognition.onend = function () {
                     recognizing = false;
                     $("#mic-button").removeClass("recording");
                     console.log("Speech recognition ended");
-                    // Auto-submit the form if there is text
                     if ($("#question").val().trim() !== "") {
                         $("#qa-form").submit();
                     }
@@ -293,9 +445,14 @@
                 alert("Speech Recognition API is not supported in this browser.");
             }
 
-            // Start recognition on mousedown/touchstart on the mic button
+            // Mic button events (press-and-hold)
             $("#mic-button").on("mousedown touchstart", function (e) {
                 e.preventDefault();
+                // Prevent starting new speech recognition if audio is still playing
+                if (isAudioPlaying) {
+                    console.log("Cannot start speech recognition while audio is playing.");
+                    return;
+                }
                 if (recognition && !recognizing) {
                     recognition.start();
                     recognizing = true;
@@ -304,7 +461,6 @@
                 }
             });
 
-            // Stop recognition on mouseup, touchend, or mouseleave on the mic button
             $("#mic-button").on("mouseup touchend mouseleave", function (e) {
                 e.preventDefault();
                 if (recognition && recognizing) {
