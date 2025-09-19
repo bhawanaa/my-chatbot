@@ -1,0 +1,89 @@
+{
+    "app_config": {
+        "name": "Veloci AI",
+        "version": "2.0.0",
+        "description": "Interactive AI Chatbot with Voice and Document Processing",
+        "host": "0.0.0.0",
+        "port": 7000,
+        "debug": false
+    },
+    "ai_config": {
+        "model": "gpt-3.5-turbo",
+        "temperature": 0.3,
+        "max_tokens": 1000,
+        "streaming": true
+    },
+    "voice_config": {
+        "default_voice": "9BWtsMINqrJLrRacOk9x",
+        "default_speed": 1.0,
+        "available_voices": [
+            {
+                "id": "9BWtsMINqrJLrRacOk9x",
+                "name": "Aria",
+                "description": "Young, friendly female voice",
+                "gender": "female"
+            },
+            {
+                "id": "zcAOhNBS3c14rBihAFp1",
+                "name": "Adam",
+                "description": "Deep, professional male voice",
+                "gender": "male"
+            },
+            {
+                "id": "pNInz6obpgDQGcFmaJgB",
+                "name": "Antoni",
+                "description": "Warm, engaging male voice",
+                "gender": "male"
+            },
+            {
+                "id": "VR6AewLTigWG4xSOukaG",
+                "name": "Arnold",
+                "description": "Authoritative male voice",
+                "gender": "male"
+            }
+        ]
+    },
+    "document_config": {
+        "max_file_size_mb": 10,
+        "chunk_size": 3000,
+        "chunk_overlap": 200,
+        "supported_formats": [
+            "pdf",
+            "docx",
+            "xlsx",
+            "txt",
+            "jpg",
+            "jpeg",
+            "png",
+            "tif"
+        ],
+        "ocr_enabled": true
+    },
+    "chat_config": {
+        "max_history_length": 50,
+        "enable_suggestions": true,
+        "enable_websocket": true,
+        "typing_delay_ms": 50
+    },
+    "ui_config": {
+        "theme": "gradient",
+        "primary_color": "#007bff",
+        "secondary_color": "#6f42c1",
+        "enable_animations": true,
+        "auto_scroll": true
+    },
+    "security_config": {
+        "cors_enabled": true,
+        "allowed_origins": [
+            "*"
+        ],
+        "rate_limiting": false,
+        "max_requests_per_minute": 60
+    },
+    "logging_config": {
+        "level": "INFO",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "file_logging": false,
+        "log_file": "chatbot.log"
+    }
+}
